@@ -1,0 +1,103 @@
+{
+  "languages": [
+    {
+      "code": "auto",
+      "name": "Auto Detect",
+      "nativeName": "Auto Detect",
+      "direction": "ltr",
+      "translationSupported": false,
+      "detectOnly": true
+    },
+    {
+      "code": "en",
+      "name": "English",
+      "nativeName": "English",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "ta",
+      "name": "Tamil",
+      "nativeName": "தமிழ்",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "hi",
+      "name": "Hindi",
+      "nativeName": "हिन्दी",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "te",
+      "name": "Telugu",
+      "nativeName": "తెలుగు",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "ml",
+      "name": "Malayalam",
+      "nativeName": "മലയാളം",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "kn",
+      "name": "Kannada",
+      "nativeName": "ಕನ್ನಡ",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "ja",
+      "name": "Japanese",
+      "nativeName": "日本語",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "ko",
+      "name": "Korean",
+      "nativeName": "한국어",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "fr",
+      "name": "French",
+      "nativeName": "Français",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "de",
+      "name": "German",
+      "nativeName": "Deutsch",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "es",
+      "name": "Spanish",
+      "nativeName": "Español",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "zh",
+      "name": "Chinese",
+      "nativeName": "中文",
+      "direction": "ltr",
+      "translationSupported": true
+    },
+    {
+      "code": "ar",
+      "name": "Arabic",
+      "nativeName": "العربية",
+      "direction": "rtl",
+      "translationSupported": true
+    }
+  ]
+}

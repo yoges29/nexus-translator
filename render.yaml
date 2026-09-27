@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: nexus-translator-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: CORS_ORIGINS
+        value: http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001
+      - key: CORS_ORIGIN_REGEX
+        value: ^(https:\/\/.*\.vercel\.app|https:\/\/.*\.onrender\.com)$
+      - key: TRANSLATION_PROVIDER
+        value: libretranslate
+      - key: TRANSLATION_API_URL
+        value: https://libretranslate.com

@@ -1,0 +1,42 @@
+# Environment & Secrets
+.env
+.env.*
+.env*.local
+!.env.example
+*.pem
+*.key
+*.cert
+service-account*.json
+credentials*.json
+
+# Databases & local storage
+*.db
+*.sqlite
+*.sqlite3
+nexus_translator.db
+test.db
+temp_documents/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+ENV/
+
+# Testing & Cache
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Logs & Editors
+*.log
+.vscode/
+.idea/
+*.swp
+*.code-workspace
