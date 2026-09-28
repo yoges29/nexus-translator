@@ -39,6 +39,22 @@ from app.services.conversation_service import ConversationService
 from app.services.document_service import DocumentTranslationService
 from app.services.translation_service import TranslationService
 from app.services.voice_service import VoiceTranslationService
+from app.services.providers.speech_stt import detect_audio_format
+
+
+def resolve_audio_content_type(content_type: str | None, filename: str | None, audio_bytes: bytes) -> str:
+    fmt, _ = detect_audio_format(audio_bytes, content_type or "", filename)
+    if fmt == "wav":
+        return "audio/wav"
+    elif fmt == "mp4":
+        return "audio/mp4"
+    elif fmt == "ogg":
+        return "audio/ogg"
+    elif fmt == "mp3":
+        return "audio/mp3"
+    elif fmt == "flac":
+        return "audio/flac"
+    return "audio/webm"
 
 
 router = APIRouter(prefix="/api", tags=["translation"])
@@ -140,10 +156,11 @@ async def transcribe_audio(
     service = TranslationService(db)
     try:
         audio_bytes = await file.read()
-        content_type = file.content_type or "audio/wav"
+        content_type = resolve_audio_content_type(file.content_type, file.filename, audio_bytes)
         result = await service.transcribe_speech(
             audio_bytes=audio_bytes,
             content_type=content_type,
+            filename=file.filename,
             language=language,
         )
     except AppError as exc:
@@ -221,10 +238,11 @@ async def translate_voice_speech(
     service = TranslationService(db)
     try:
         audio_bytes = await file.read()
-        content_type = file.content_type or "audio/webm"
+        content_type = resolve_audio_content_type(file.content_type, file.filename, audio_bytes)
         transcription = await service.transcribe_speech(
             audio_bytes=audio_bytes,
             content_type=content_type,
+            filename=file.filename,
             language=source_language if source_language != "auto" else None,
         )
         if not transcription.text.strip():
@@ -681,12 +699,13 @@ async def send_conversation_audio_message(
     service = ConversationService(db)
     try:
         content = await file.read()
-        content_type = file.content_type or "audio/wav"
+        content_type = resolve_audio_content_type(file.content_type, file.filename, content)
         msg = await service.send_audio_message(
             session_id=session_id,
             speaker=speaker,
             audio_bytes=content,
             content_type=content_type,
+            filename=file.filename,
         )
         return ConversationMessageItem.model_validate(msg)
     except AppError as exc:

@@ -382,6 +382,7 @@ class TranslationService:
         self,
         audio_bytes: bytes,
         content_type: str = "audio/wav",
+        filename: str | None = None,
         language: str | None = None,
     ) -> TranscriptionResult:
         if not audio_bytes:
@@ -389,7 +390,10 @@ class TranslationService:
         if len(audio_bytes) > self.settings.max_audio_size_bytes:
             raise AppError("Audio file exceeds maximum allowed size.")
         return await self.stt_provider.transcribe(
-            audio_bytes, content_type=content_type, language=language
+            audio_bytes,
+            content_type=content_type,
+            filename=filename,
+            language=language,
         )
 
     async def synthesize_speech(

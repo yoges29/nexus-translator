@@ -267,3 +267,20 @@ def test_voice_translate_speech_endpoint(client, mock_stt):
     data = response.json()
     assert data["input_method"] == "voice"
     assert "translated_text" in data
+
+
+def test_voice_websocket_binary_chunk_stream(client, mock_stt):
+    with client.websocket_connect("/api/voice/stream?source_language=en&target_language=ta") as ws:
+        ready = ws.receive_json()
+        assert ready["type"] == "ready"
+
+        # Send binary audio chunk (> 6000 bytes)
+        fake_chunk = b"\x1a\x45\xdf\xa3" + (b"\x00" * 7000)
+        ws.send_bytes(fake_chunk)
+
+        # Expect final translation frame
+        frame = ws.receive_json()
+        assert frame["type"] == "final"
+        assert frame["original_text"] == "Hello world speech"
+        assert "translated_text" in frame
+

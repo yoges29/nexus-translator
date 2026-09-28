@@ -49,6 +49,10 @@ class VoiceTranslationService:
         current_target = target_language
         current_style = translation_style
 
+        accumulated_audio = bytearray()
+        last_recognized_text = ""
+        is_transcribing = False
+
         try:
             while True:
                 # Receive message frame (text JSON or binary audio)
@@ -68,6 +72,8 @@ class VoiceTranslationService:
                         current_source = payload.get("source_language", current_source)
                         current_target = payload.get("target_language", current_target)
                         current_style = payload.get("translation_style", current_style)
+                        accumulated_audio.clear()
+                        last_recognized_text = ""
                         await websocket.send_json(
                             {
                                 "type": "config_updated",
@@ -76,6 +82,12 @@ class VoiceTranslationService:
                                 "translation_style": current_style,
                             }
                         )
+                        continue
+
+                    # Reset audio stream buffer frame
+                    if msg_type in ("reset_audio", "clear"):
+                        accumulated_audio.clear()
+                        last_recognized_text = ""
                         continue
 
                     # Ping frame for keepalive
@@ -168,59 +180,112 @@ class VoiceTranslationService:
                             )
 
                 elif "bytes" in message and message["bytes"]:
-                    # Binary audio chunk frame
+                    # Binary audio chunk frame from client MediaRecorder or AudioContext
                     audio_bytes: bytes = message["bytes"]
-                    if len(audio_bytes) < 64:
+                    if len(audio_bytes) < 32:
                         continue
 
-                    try:
-                        transcription = await self.translation_service.transcribe_speech(
-                            audio_bytes=audio_bytes,
-                            content_type="audio/webm",
-                            language=current_source if current_source != "auto" else None,
-                        )
+                    # Check audio container format
+                    is_wav = audio_bytes.startswith(b"RIFF") and b"WAVE" in audio_bytes[:16]
+                    if is_wav:
+                        audio_to_transcribe = audio_bytes
+                        c_type = "audio/wav"
+                    else:
+                        c_type = "audio/webm"
+                        if audio_bytes.startswith(b"\x1a\x45\xdf\xa3"):
+                            accumulated_audio = bytearray(audio_bytes)
+                        else:
+                            accumulated_audio.extend(audio_bytes)
+                        audio_to_transcribe = bytes(accumulated_audio)
 
-                        if transcription.text.strip():
-                            (
-                                resolved_src,
-                                resolved_tgt,
-                                translated_text,
-                                style_used,
-                                method,
-                                detected_lang,
-                                history_id,
-                            ) = await self.translation_service.translate(
-                                text=transcription.text,
-                                source_language=current_source,
-                                target_language=current_target,
-                                style=current_style,
-                                input_method="voice",
-                            )
+                    logger.debug(
+                        "Received audio chunk: size=%d bytes, format=%s, total_buffered=%d bytes",
+                        len(audio_bytes),
+                        c_type,
+                        len(audio_to_transcribe),
+                    )
 
-                            await websocket.send_json(
-                                {
-                                    "type": "final",
-                                    "original_text": transcription.text,
-                                    "translated_text": translated_text,
-                                    "source_language": resolved_src,
-                                    "target_language": resolved_tgt,
-                                    "detected_language": detected_lang,
-                                    "confidence": transcription.confidence,
-                                    "translation_style": style_used,
-                                    "history_id": history_id,
-                                }
+                    # Only transcribe when sufficient audio has buffered (>= 6000 bytes) and not already transcribing
+                    if len(audio_to_transcribe) >= 6000 and not is_transcribing:
+                        is_transcribing = True
+
+                        async def _process_chunk(
+                            chunk_data: bytes,
+                            content_type: str,
+                            src_lang: str,
+                            tgt_lang: str,
+                            style: str,
+                        ) -> None:
+                            nonlocal is_transcribing, last_recognized_text
+                            try:
+                                transcription = await self.translation_service.transcribe_speech(
+                                    audio_bytes=chunk_data,
+                                    content_type=content_type,
+                                    language=src_lang if src_lang != "auto" else None,
+                                )
+
+                                text = transcription.text.strip()
+                                if text and text.lower() != last_recognized_text.lower():
+                                    last_recognized_text = text
+                                    logger.info("Real-time voice recognized text: length=%d", len(text))
+
+                                    (
+                                        resolved_src,
+                                        resolved_tgt,
+                                        translated_text,
+                                        style_used,
+                                        method,
+                                        detected_lang,
+                                        history_id,
+                                    ) = await self.translation_service.translate(
+                                        text=text,
+                                        source_language=src_lang,
+                                        target_language=tgt_lang,
+                                        style=style,
+                                        input_method="voice",
+                                    )
+
+                                    await websocket.send_json(
+                                        {
+                                            "type": "final",
+                                            "original_text": text,
+                                            "translated_text": translated_text,
+                                            "source_language": resolved_src,
+                                            "target_language": resolved_tgt,
+                                            "detected_language": detected_lang,
+                                            "confidence": transcription.confidence,
+                                            "translation_style": style_used,
+                                            "history_id": history_id,
+                                        }
+                                    )
+                                    # Clear buffer after successful transcription of phrase
+                                    accumulated_audio.clear()
+                            except AppError as exc:
+                                # Normal silence or non-speech interval during streaming
+                                logger.debug("Stream audio chunk not recognized yet: %s", exc)
+                            except Exception as exc:
+                                logger.warning("Stream audio chunk transcription error: %s", exc)
+                            finally:
+                                is_transcribing = False
+
+                        import asyncio
+                        asyncio.create_task(
+                            _process_chunk(
+                                audio_to_transcribe,
+                                c_type,
+                                current_source,
+                                current_target,
+                                current_style,
                             )
-                    except Exception as exc:
-                        logger.warning("Audio chunk transcription error: %s", exc)
-                        await websocket.send_json(
-                            {
-                                "type": "error",
-                                "message": "Could not recognize audio chunk.",
-                            }
                         )
 
         except WebSocketDisconnect:
             logger.info("WebSocket voice stream disconnected cleanly by client.")
+        except RuntimeError as exc:
+            if "disconnect" in str(exc).lower() or "cannot call" in str(exc).lower():
+                logger.info("WebSocket voice stream disconnected cleanly by client.")
+            else:
+                logger.exception("Runtime error in voice WebSocket stream: %s", exc)
         except Exception as exc:
             logger.exception("Unexpected error in voice WebSocket stream: %s", exc)
             try:

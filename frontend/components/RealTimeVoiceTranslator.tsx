@@ -3,6 +3,7 @@
 import { ActionButton } from "@/components/ActionButton";
 import { LanguageSelect } from "@/components/LanguageSelect";
 import { getSourceLanguages, getTranslatableLanguages } from "@/lib/languages";
+import { getSupportedAudioMimeType } from "@/lib/audioRecorder";
 import { getVoiceWebSocketUrl, synthesizeSpeech } from "@/services/api";
 import type { TranslationStyle } from "@/types/language";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -54,6 +55,22 @@ interface TranscriptItem {
   detectedLang?: string | null;
 }
 
+const LANGUAGE_LOCALE_MAP: Record<string, string> = {
+  en: "en-US",
+  ta: "ta-IN",
+  hi: "hi-IN",
+  te: "te-IN",
+  ml: "ml-IN",
+  kn: "kn-IN",
+  ja: "ja-JP",
+  ko: "ko-KR",
+  fr: "fr-FR",
+  de: "de-DE",
+  es: "es-ES",
+  zh: "zh-CN",
+  ar: "ar-SA",
+};
+
 interface RealTimeVoiceTranslatorProps {
   onHistoryRefresh?: () => void;
 }
@@ -73,8 +90,9 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
   const [autoSpeak, setAutoSpeak] = useState(false);
 
   // Live streaming text
-  const [interimOriginal, setInterimOriginal] = useState("");
-  const [interimTranslated, setInterimTranslated] = useState("");
+  const [liveOriginal, setLiveOriginal] = useState("");
+  const [liveTranslated, setLiveTranslated] = useState("");
+  const [isInterim, setIsInterim] = useState(false);
   const [finalTranscripts, setFinalTranscripts] = useState<TranscriptItem[]>([]);
   const [activeTtsId, setActiveTtsId] = useState<string | null>(null);
 
@@ -84,6 +102,7 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
   // References for cleanup
   const socketRef = useRef<WebSocket | null>(null);
   const recognitionRef = useRef<ISpeechRecognitionInstance | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -132,6 +151,14 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
     }
+    if (mediaRecorderRef.current) {
+      try {
+        if (mediaRecorderRef.current.state !== "inactive") {
+          mediaRecorderRef.current.stop();
+        }
+      } catch {}
+      mediaRecorderRef.current = null;
+    }
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
@@ -158,14 +185,18 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
     isStoppingRef.current = true;
     setIsListening(false);
     setConnectionStatus("idle");
-    setInterimOriginal("");
-    setInterimTranslated("");
+    setLiveOriginal("");
+    setLiveTranslated("");
+    setIsInterim(false);
 
     cleanupMedia();
 
     if (socketRef.current) {
       if (socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.close(1000, "User stopped listening");
+        try {
+          socketRef.current.send(JSON.stringify({ type: "reset_audio" }));
+          socketRef.current.close(1000, "User stopped listening");
+        } catch {}
       }
       socketRef.current = null;
     }
@@ -175,8 +206,9 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
   const startListening = async () => {
     setPermissionError(null);
     setNetworkError(null);
-    setInterimOriginal("");
-    setInterimTranslated("");
+    setLiveOriginal("");
+    setLiveTranslated("");
+    setIsInterim(false);
     isStoppingRef.current = false;
 
     // Check browser compatibility
@@ -273,8 +305,9 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
       try {
         const data = JSON.parse(event.data);
         if (data.type === "interim") {
-          setInterimOriginal(data.original_text || "");
-          setInterimTranslated(data.translated_text || "");
+          setLiveOriginal(data.original_text || "");
+          setLiveTranslated(data.translated_text || "");
+          setIsInterim(true);
         } else if (data.type === "final") {
           const newItem: TranscriptItem = {
             id: `voice-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -285,9 +318,10 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
             timestamp: new Date(),
             detectedLang: data.detected_language,
           };
+          setLiveOriginal(data.original_text || "");
+          setLiveTranslated(data.translated_text || "");
+          setIsInterim(false);
           setFinalTranscripts((prev) => [newItem, ...prev]);
-          setInterimOriginal("");
-          setInterimTranslated("");
           onHistoryRefresh?.();
 
           if (autoSpeak && data.translated_text) {
@@ -312,82 +346,97 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
       }
     };
 
-    // 4. Initialize Speech Recognition
+    // 4. Start streaming audio chunks via MediaRecorder over WebSocket
+    try {
+      const preferredMime = getSupportedAudioMimeType();
+      let mediaRecorder: MediaRecorder;
+      try {
+        mediaRecorder = preferredMime
+          ? new MediaRecorder(stream, { mimeType: preferredMime })
+          : new MediaRecorder(stream);
+      } catch {
+        mediaRecorder = new MediaRecorder(stream);
+      }
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = async (e) => {
+        if (e.data && e.data.size > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
+          try {
+            const buffer = await e.data.arrayBuffer();
+            if (buffer.byteLength > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
+              socketRef.current.send(buffer);
+            }
+          } catch {}
+        }
+      };
+
+      // 1500ms slice for real-time speech processing
+      mediaRecorder.start(1500);
+    } catch {
+      // Non-fatal if browser blocks or lacks MediaRecorder
+    }
+
+    // 5. Initialize client-side Web Speech API if available (provides instant interim transcripts)
     const SpeechRecognition =
       (window as unknown as { SpeechRecognition?: SpeechRecognitionConstructor }).SpeechRecognition ||
       (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionConstructor }).webkitSpeechRecognition;
 
     if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = sourceLanguage === "auto" ? "en-US" : sourceLanguage;
-      recognitionRef.current = recognition;
+      try {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        const bcp47 = LANGUAGE_LOCALE_MAP[sourceLanguage] || (sourceLanguage === "auto" ? "en-US" : sourceLanguage);
+        recognition.lang = bcp47;
+        recognitionRef.current = recognition;
 
-      recognition.onresult = (event: SpeechRecognitionEventObj) => {
-        let interimText = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            if (ws.readyState === WebSocket.OPEN && transcript.trim()) {
-              ws.send(
-                JSON.stringify({
-                  type: "transcript",
-                  text: transcript.trim(),
-                  is_final: true,
-                })
-              );
+        recognition.onresult = (event: SpeechRecognitionEventObj) => {
+          let interimText = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              if (socketRef.current?.readyState === WebSocket.OPEN && transcript.trim()) {
+                socketRef.current.send(
+                  JSON.stringify({
+                    type: "transcript",
+                    text: transcript.trim(),
+                    is_final: true,
+                  })
+                );
+              }
+            } else {
+              interimText += transcript;
             }
-          } else {
-            interimText += transcript;
           }
-        }
-        if (interimText.trim() && ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: "transcript",
-              text: interimText.trim(),
-              is_final: false,
-            })
-          );
-        }
-      };
-
-      recognition.onerror = (event: SpeechRecognitionErrorEventObj) => {
-        if (event.error === "not-allowed") {
-          setPermissionError("Speech recognition access denied.");
-          stopListening();
-        }
-      };
-
-      recognition.onend = () => {
-        // Restart speech recognition automatically if still listening
-        if (!isStoppingRef.current && socketRef.current?.readyState === WebSocket.OPEN) {
-          try {
-            recognition.start();
-          } catch {}
-        }
-      };
-
-      try {
-        recognition.start();
-      } catch (err: unknown) {
-        const error = err as Error;
-        setNetworkError(`Could not start speech recognition: ${error.message || "Error"}`);
-      }
-    } else {
-      // Fallback for browsers without Web Speech API: Send audio chunks via MediaRecorder
-      try {
-        const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-        mediaRecorder.ondataavailable = async (e) => {
-          if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-            const buffer = await e.data.arrayBuffer();
-            ws.send(buffer);
+          if (interimText.trim() && socketRef.current?.readyState === WebSocket.OPEN) {
+            socketRef.current.send(
+              JSON.stringify({
+                type: "transcript",
+                text: interimText.trim(),
+                is_final: false,
+              })
+            );
           }
         };
-        mediaRecorder.start(2500); // 2.5s slice
+
+        recognition.onerror = (event: SpeechRecognitionErrorEventObj) => {
+          if (event.error === "not-allowed") {
+            setPermissionError("Speech recognition access denied.");
+            stopListening();
+          }
+        };
+
+        recognition.onend = () => {
+          if (!isStoppingRef.current && socketRef.current?.readyState === WebSocket.OPEN) {
+            try {
+              recognition.start();
+            } catch {}
+          }
+        };
+
+        recognition.start();
       } catch {
-        setPermissionError("Live speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.");
+        // Non-fatal if SpeechRecognition cannot start; MediaRecorder is streaming directly to backend
       }
     }
 
@@ -637,38 +686,40 @@ export function RealTimeVoiceTranslator({ onHistoryRefresh }: RealTimeVoiceTrans
       </section>
 
       {/* Live Stream Viewport */}
-      {(isListening || interimOriginal || interimTranslated) && (
+      {(isListening || liveOriginal || liveTranslated) && (
         <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Spoken interim card */}
+          {/* Spoken live card */}
           <div className="rounded-2xl border border-nexus-accent/40 bg-nexus-surface p-5 shadow-nexus relative overflow-hidden">
             <div className="flex items-center justify-between border-b border-nexus-border pb-2 mb-3">
               <span className="text-xs font-semibold uppercase tracking-wider text-nexus-accent flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full bg-nexus-accent animate-pulse" />
                 Live Input ({sourceLanguage.toUpperCase()})
               </span>
-              <span className="text-[10px] text-nexus-muted">Interim STT</span>
+              <span className="text-[10px] text-nexus-muted">{isInterim ? "Interim STT" : "Live STT"}</span>
             </div>
             <p className="text-base text-nexus-foreground min-h-[48px] leading-relaxed">
-              {interimOriginal ? (
-                <span className="italic text-nexus-foreground/90">{interimOriginal}</span>
+              {liveOriginal ? (
+                <span className={isInterim ? "italic text-nexus-foreground/80" : "font-medium text-nexus-foreground"}>
+                  {liveOriginal}
+                </span>
               ) : (
                 <span className="text-nexus-muted/50 italic">Listening for speech...</span>
               )}
             </p>
           </div>
 
-          {/* Translated interim card */}
+          {/* Translated live card */}
           <div className="rounded-2xl border border-emerald-500/40 bg-nexus-surface p-5 shadow-nexus relative overflow-hidden">
             <div className="flex items-center justify-between border-b border-nexus-border pb-2 mb-3">
               <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
                 Live Translation ({targetLanguage.toUpperCase()})
               </span>
-              <span className="text-[10px] text-nexus-muted">Streaming</span>
+              <span className="text-[10px] text-nexus-muted">{isInterim ? "Streaming" : "Translated"}</span>
             </div>
             <p className="text-base text-emerald-300 min-h-[48px] leading-relaxed font-medium">
-              {interimTranslated ? (
-                <span className="animate-fade-in">{interimTranslated}</span>
+              {liveTranslated ? (
+                <span className="animate-fade-in">{liveTranslated}</span>
               ) : (
                 <span className="text-nexus-muted/50 italic">Translation will appear instantly...</span>
               )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { transcribeAudio } from "@/services/api";
+import { getSupportedAudioMimeType, ensureValidAudioBlob } from "@/lib/audioRecorder";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type RecordingState = "idle" | "listening" | "processing" | "complete" | "error";
@@ -68,21 +69,20 @@ export function useVoiceRecorder({
       });
       streamRef.current = stream;
 
-      // Determine mime type supported by browser
-      let mimeType = "audio/webm";
-      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
-        mimeType = "audio/webm;codecs=opus";
-      } else if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) {
-        mimeType = "audio/ogg;codecs=opus";
-      } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
-        mimeType = "audio/mp4";
-      } else if (MediaRecorder.isTypeSupported("audio/wav")) {
-        mimeType = "audio/wav";
+      // Determine mime type supported by browser, preferring webm/opus, webm, mp4, wav
+      const preferredMime = getSupportedAudioMimeType();
+      let recorder: MediaRecorder;
+      try {
+        recorder = preferredMime
+          ? new MediaRecorder(stream, { mimeType: preferredMime })
+          : new MediaRecorder(stream);
+      } catch {
+        recorder = new MediaRecorder(stream);
       }
 
-      const recorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
+      const resolvedMime = recorder.mimeType || preferredMime || "audio/webm";
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -92,7 +92,9 @@ export function useVoiceRecorder({
 
       recorder.onstop = async () => {
         setState("processing");
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        const finalMime = recorder.mimeType || resolvedMime || "audio/webm";
+        const rawBlob = new Blob(audioChunksRef.current, { type: finalMime });
+        const audioBlob = ensureValidAudioBlob(rawBlob, finalMime);
         cleanupStream();
 
         if (audioBlob.size < 100) {

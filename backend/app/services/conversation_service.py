@@ -191,6 +191,7 @@ class ConversationService:
         speaker: str,
         audio_bytes: bytes,
         content_type: str = "audio/wav",
+        filename: str | None = None,
     ) -> ConversationMessage:
         session = self.get_session(session_id)
         speaker_norm = speaker.strip().lower()
@@ -202,6 +203,7 @@ class ConversationService:
         res = self.stt_provider.transcribe(
             audio_bytes=audio_bytes,
             content_type=content_type,
+            filename=filename,
             language=hint_lang,
         )
         if inspect.isawaitable(res):

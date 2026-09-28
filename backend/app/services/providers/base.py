@@ -77,6 +77,7 @@ class SpeechToTextProvider(ABC):
         self,
         audio_bytes: bytes,
         content_type: str = "audio/wav",
+        filename: str | None = None,
         language: str | None = None,
     ) -> TranscriptionResult:
         raise NotImplementedError

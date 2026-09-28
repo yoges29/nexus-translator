@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     backend_host: str = "0.0.0.0"
 
     database_url: str = "postgresql+psycopg2://nexus:nexus_secret@localhost:5432/nexus_translator"
-    cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
+    cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001,https://nexus-translator-alpha.vercel.app"
     cors_origin_regex: str = r"^(https:\/\/.*\.vercel\.app|https:\/\/.*\.onrender\.com)$"
     max_text_length: int = 20000
     translation_timeout_seconds: int = 30

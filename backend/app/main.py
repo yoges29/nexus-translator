@@ -1,5 +1,22 @@
 import logging
+import socket
 from contextlib import asynccontextmanager
+
+# Prefer IPv4 resolution to prevent dual-stack IPv6 connection aborts on Windows
+_original_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_preferred_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    try:
+        res = _original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+        if res:
+            return res
+    except Exception:
+        pass
+    return _original_getaddrinfo(host, port, family, type, proto, flags)
+
+
+socket.getaddrinfo = _ipv4_preferred_getaddrinfo
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

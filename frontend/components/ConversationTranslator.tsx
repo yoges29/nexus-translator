@@ -2,6 +2,7 @@
 
 import { useAudioPlayer } from "@/hooks/useAudioPlayer";
 import { getLanguageByCode, getTranslatableLanguages } from "@/lib/languages";
+import { getSupportedAudioMimeType, ensureValidAudioBlob } from "@/lib/audioRecorder";
 import {
   createConversationSession,
   deleteConversationSession,
@@ -175,18 +176,19 @@ export function ConversationTranslator({ onHistoryRefresh }: ConversationTransla
       });
       streamRef.current = stream;
 
-      let mimeType = "audio/webm";
-      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
-        mimeType = "audio/webm;codecs=opus";
-      } else if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) {
-        mimeType = "audio/ogg;codecs=opus";
-      } else if (MediaRecorder.isTypeSupported("audio/wav")) {
-        mimeType = "audio/wav";
+      const preferredMime = getSupportedAudioMimeType();
+      let recorder: MediaRecorder;
+      try {
+        recorder = preferredMime
+          ? new MediaRecorder(stream, { mimeType: preferredMime })
+          : new MediaRecorder(stream);
+      } catch {
+        recorder = new MediaRecorder(stream);
       }
 
-      const recorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
+      const resolvedMime = recorder.mimeType || preferredMime || "audio/webm";
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -198,7 +200,9 @@ export function ConversationTranslator({ onHistoryRefresh }: ConversationTransla
         if (speaker === "speaker_a") setSpeakerAState("processing");
         else setSpeakerBState("processing");
 
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        const finalMime = recorder.mimeType || resolvedMime || "audio/webm";
+        const rawBlob = new Blob(audioChunksRef.current, { type: finalMime });
+        const audioBlob = ensureValidAudioBlob(rawBlob, finalMime);
         stopRecordingCleanup();
 
         if (audioBlob.size < 100) {
@@ -220,7 +224,7 @@ export function ConversationTranslator({ onHistoryRefresh }: ConversationTransla
           const newMsg = await sendConversationAudioMessage(session.id, {
             speaker,
             audioBlob,
-            contentType: mimeType,
+            contentType: audioBlob.type || finalMime,
           });
 
           setMessages((prev) => [...prev, newMsg]);

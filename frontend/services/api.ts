@@ -16,6 +16,7 @@ import type {
   TranslationMode,
   TranslationStyle,
 } from "@/types/language";
+import { getAudioFilename, ensureValidAudioBlob } from "@/lib/audioRecorder";
 
 
 const rawApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
@@ -111,8 +112,10 @@ export async function fetchAlternatives(payload: {
 }
 
 export async function transcribeAudio(audioBlob: Blob, language?: string): Promise<TranscribeResponse> {
+  const validBlob = ensureValidAudioBlob(audioBlob);
+  const filename = getAudioFilename(validBlob, "recording");
   const formData = new FormData();
-  formData.append("file", audioBlob, "recording.webm");
+  formData.append("file", validBlob, filename);
   if (language && language !== "auto") {
     formData.append("language", language);
   }
@@ -400,13 +403,12 @@ export async function sendConversationAudioMessage(
     contentType?: string;
   }
 ): Promise<ConversationMessageItem> {
+  const fallbackMime = payload.contentType || "audio/webm";
+  const validBlob = ensureValidAudioBlob(payload.audioBlob, fallbackMime);
+  const filename = getAudioFilename(validBlob, `speech_${payload.speaker}`);
   const formData = new FormData();
   formData.append("speaker", payload.speaker);
-  formData.append(
-    "file",
-    payload.audioBlob,
-    `speech_${payload.speaker}.wav`
-  );
+  formData.append("file", validBlob, filename);
 
   const response = await fetch(
     `${API_URL}/api/conversations/sessions/${sessionId}/messages/audio`,
@@ -448,8 +450,10 @@ export async function translateVoiceSpeech(payload: {
   sourceLanguage?: string;
   translationStyle?: TranslationStyle;
 }): Promise<TranslateResponse> {
+  const validBlob = ensureValidAudioBlob(payload.audioBlob);
+  const filename = getAudioFilename(validBlob, "recording");
   const formData = new FormData();
-  formData.append("file", payload.audioBlob, "recording.webm");
+  formData.append("file", validBlob, filename);
   formData.append("target_language", payload.targetLanguage);
   formData.append("source_language", payload.sourceLanguage ?? "auto");
   formData.append("translation_style", payload.translationStyle ?? "general");
